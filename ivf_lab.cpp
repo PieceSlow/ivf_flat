@@ -53,6 +53,11 @@ Arguments parse(int argc, char** argv) {
         else if (key == "--k") args.search.k = number(value);
         else if (key == "--nprobe") args.search.nprobe = number(value);
         else if (key == "--grain") args.search.grain = number(value);
+        else if (key == "--simd") {
+            if (value == "on") args.search.simd = true;
+            else if (value == "off") args.search.simd = false;
+            else throw std::invalid_argument("--simd expects on or off");
+        }
         else if (key == "--threads") {
             const auto n = number(value);
             if (n == 0 || n > INT_MAX) throw std::invalid_argument("invalid thread count");
@@ -83,7 +88,8 @@ int run(int argc, char** argv) {
         std::cout << "SIFT IVF-Flat starter\n"
             "  --only serial|std|exact|omp1|omp2   --mode check|bench\n"
             "  --queries 128   --batch 32   --k 10   --nprobe 8\n"
-            "  --threads 4   --grain 1024   --repeats 10   --warmup 1\n"
+            "  --threads 4   --grain 1024   --simd on|off (omp1/omp2; default on)\n"
+            "  --repeats 10   --warmup 1\n"
             "  --base PATH (.fbin)   --centroids PATH (.fvecs)\n"
             "  --cluster-ids PATH (.ivecs)   --queries-file PATH (.fbin)\n"
             "  --gt PATH (.ibin)   --csv PATH\n";
@@ -96,6 +102,7 @@ int run(int argc, char** argv) {
     const auto truth = ivf::read_ibin(args.groundtruth);
     if (args.only == "exact") args.search.nprobe = index.nlist;
     if (args.only == "serial" || args.only == "exact") args.search.threads = 1;
+    if (args.only != "omp1" && args.only != "omp2") args.search.simd = false;
     if (queries.dim != index.dim || args.queries > queries.rows || args.queries > truth.rows ||
         args.search.k > index.size || args.search.k > truth.dim || args.search.nprobe > index.nlist) {
         throw std::invalid_argument("query count, dimension, k or nprobe exceeds input bounds");
@@ -112,7 +119,8 @@ int run(int argc, char** argv) {
     omp_set_dynamic(0);
     omp_set_num_threads(args.search.threads);
     std::cout << "N=" << index.size << " dim=" << index.dim << " nlist=" << index.nlist
-              << " strategy=" << args.only << " threads=" << args.search.threads << '\n';
+              << " strategy=" << args.only << " threads=" << args.search.threads
+              << " simd=" << (args.search.simd ? "on" : "off") << '\n';
 
     std::vector<ivf::Neighbor> reference(args.queries * args.search.k), output(reference.size());
     const auto reference_search = args.search.nprobe == index.nlist
@@ -144,7 +152,7 @@ int run(int argc, char** argv) {
     if (!args.csv.empty()) {
         csv.exceptions(std::ios::failbit | std::ios::badbit);
         csv.open(args.csv);
-        csv << "strategy,threads,queries,batch,k,nprobe,grain,repeat,time_ms,qps,recall,correctness\n"
+        csv << "strategy,threads,simd,queries,batch,k,nprobe,grain,repeat,time_ms,qps,recall,correctness\n"
             << std::setprecision(12);
     }
     for (std::size_t r = 0; r < args.warmup; ++r) run_once();
@@ -152,7 +160,8 @@ int run(int argc, char** argv) {
     for (std::size_t r = 0; r < args.repeats; ++r) {
         times[r] = run_once();
         if (csv.is_open()) {
-            csv << args.only << ',' << args.search.threads << ',' << args.queries << ','
+            csv << args.only << ',' << args.search.threads << ','
+                << (args.search.simd ? "on" : "off") << ',' << args.queries << ','
                 << args.batch << ',' << args.search.k << ',' << args.search.nprobe << ','
                 << args.search.grain << ',' << r + 1 << ',' << times[r] << ','
                 << args.queries * 1000.0 / times[r] << ',' << recall << ",PASS\n";

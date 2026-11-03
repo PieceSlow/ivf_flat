@@ -72,6 +72,7 @@ void search_std_thread(const IVFIndex& index, const float* queries, std::size_t 
 
 void search_omp_student_1(const IVFIndex& index, const float* queries, std::size_t count,
                           const SearchOptions& options, Neighbor* output) {
+    const auto distance = options.simd ? l2_distance_simd : l2_distance_scalar;
     // 一个循环迭代就是一个完整查询；dynamic 让空列表/长列表造成的工作量差异
     // 不必固定落在某个线程上。batch=1 时仍只有一个查询能参与此策略。
 #pragma omp parallel for schedule(dynamic) num_threads(options.threads)
@@ -82,7 +83,7 @@ void search_omp_student_1(const IVFIndex& index, const float* queries, std::size
         TopK best(options.k);
         for (const auto list : lists) {
             for (std::size_t p = index.list_ptr[list]; p < index.list_ptr[list + 1]; ++p) {
-                best.add({l2_distance_simd(query, index.vector(p), index.dim), index.ids[p]});
+                best.add({distance(query, index.vector(p), index.dim), index.ids[p]});
             }
         }
         best.finish(output + std::size_t(q) * options.k);
@@ -92,6 +93,7 @@ void search_omp_student_1(const IVFIndex& index, const float* queries, std::size
 void search_omp_student_2(const IVFIndex& index, const float* queries, std::size_t count,
                           const SearchOptions& options, Neighbor* output) {
     if (count == 0) return;
+    const auto distance = options.simd ? l2_distance_simd : l2_distance_scalar;
     // 整个 batch 只建立一次线程团队；single 线程负责创建查询任务。
 #pragma omp parallel num_threads(options.threads)
     {
@@ -121,11 +123,11 @@ void search_omp_student_2(const IVFIndex& index, const float* queries, std::size
                             const std::size_t id = block_id++;
                             // 边界和块编号按值复制；partials/query 由查询任务持有，
                             // 在下面的 taskwait 之前始终有效。
-#pragma omp task firstprivate(first, last, id) shared(partials, query)
+#pragma omp task firstprivate(first, last, id, distance) shared(partials, query)
                             {
                                 TopK best(options.k);
                                 for (std::size_t p = first; p < last; ++p) {
-                                    best.add({l2_distance_simd(query, index.vector(p), index.dim),
+                                    best.add({distance(query, index.vector(p), index.dim),
                                               index.ids[p]});
                                 }
                                 best.finish(partials.data() + id * options.k);

@@ -144,11 +144,35 @@ void test(const fs::path& dir) {
     std::vector<ivf::Neighbor> expected(queries.size() / index.dim * options.k);
     ivf::search_ivf_serial(index, queries.data(), queries.size() / index.dim,
                            options, expected.data());
-    for (const auto search : {ivf::search_std_thread, ivf::search_omp_student_1,
-                              ivf::search_omp_student_2}) {
+    {
         std::vector<ivf::Neighbor> parallel(queries.size() / index.dim * options.k);
-        search(index, queries.data(), queries.size() / index.dim, options, parallel.data());
+        ivf::search_std_thread(index, queries.data(), queries.size() / index.dim,
+                               options, parallel.data());
         ivf::check_result(parallel, expected);
+    }
+    for (const bool simd : {false, true}) {
+        options.simd = simd;
+        for (const auto search : {ivf::search_omp_student_1, ivf::search_omp_student_2}) {
+            std::vector<ivf::Neighbor> parallel(queries.size() / index.dim * options.k);
+            search(index, queries.data(), queries.size() / index.dim, options, parallel.data());
+            ivf::check_result(parallel, expected);
+        }
+        std::vector<ivf::Neighbor> single(options.k);
+        ivf::search_omp_student_2(index, queries.data(), 1, options, single.data());
+        ivf::check_result(single, std::vector<ivf::Neighbor>(expected.begin(),
+                                                               expected.begin() + options.k));
+
+        options.nprobe = index.nlist;
+        ivf::search_exact_serial(index, queries.data(), queries.size() / index.dim,
+                                 options, expected.data());
+        for (const auto search : {ivf::search_omp_student_1, ivf::search_omp_student_2}) {
+            std::vector<ivf::Neighbor> parallel(expected.size());
+            search(index, queries.data(), queries.size() / index.dim, options, parallel.data());
+            ivf::check_result(parallel, expected);
+        }
+        options.nprobe = 1;
+        ivf::search_ivf_serial(index, queries.data(), queries.size() / index.dim,
+                               options, expected.data());
     }
 
     ivf::IntMatrix gt{1, 3, {0, 2, 4}};
@@ -169,7 +193,8 @@ int main() {
         const fs::path dir(created);
         test(dir);
         fs::remove_all(dir);
-        std::cout << "PASS: matrix/index readers, malformed files, Top-k, correctness, recall\n";
+        std::cout << "PASS: matrix/index readers, malformed files, Top-k, "
+                     "parallel SIMD on/off correctness, recall\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

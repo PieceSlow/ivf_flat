@@ -64,7 +64,7 @@ auto gt = ivf::read_ibin("/var/dataset/gt.ibin");
 - `search_omp_student_2`：把一个查询的候选分成多个任务，分别计算后合并 Top-k。
 - `search_std_thread`：用 `std::thread` 实现按查询分块的版本，与 OpenMP 对比。
 
-两个 OpenMP 实现还需要接入自己编写的 SIMD 距离函数，并添加开关做对照实验。
+两个 OpenMP 实现使用自己编写的 SIMD 距离函数，可用 `--simd on|off` 切换候选距离计算；中心选择仍使用公共标量函数。`off` 选择不含显式 `omp simd` 的标量函数，编译器仍可能自动向量化，实际指令需用向量化报告或反汇编确认。
 
 三个函数的参数相同，声明在 `ivf_search.h` 的 `ivf` 命名空间中：
 
@@ -78,7 +78,7 @@ void search_omp_student_1(const IVFIndex& index, const float* queries,
 
 可以直接使用已有的 `select_lists`、`l2_distance_scalar`、`TopK` 和 `better`。调用 `TopK::finish` 后，结果已经排好序并写入输出，不要再往这个 TopK 对象里添加候选。
 
-三个空函数目前都会报 TODO 错误。实现后，分别用 `--only omp1`、`--only omp2`、`--only std` 运行。`make test` 只检查已提供的公共代码，自己的实现还要另行验证。
+三个策略分别用 `--only omp1`、`--only omp2`、`--only std` 运行。`make test` 包含小型数据上的策略正确性检查；真实数据还需用 `--mode check` 验证。
 
 ## 参数和输出
 
@@ -91,6 +91,7 @@ void search_omp_student_1(const IVFIndex& index, const float* queries,
 | `--queries` / `--batch` | 前 128 个查询，每批最多 32 个 |
 | `--k` / `--nprobe` | 10 / 8 |
 | `--threads` / `--grain` | 4 / 1024 |
+| `--simd` | `on` / `off`，默认 `on`；仅 `omp1`、`omp2` 生效，其他策略始终使用标量距离 |
 | `--repeats` / `--warmup` | 10 / 1；warmup 可以为 0 |
 | `--base` / `--centroids` / `--cluster-ids` | 指定数据库、中心、列表分配文件 |
 | `--queries-file` / `--gt` | 指定查询 `.fbin` 和 ground truth `.ibin` |
@@ -100,7 +101,7 @@ void search_omp_student_1(const IVFIndex& index, const float* queries,
 
 每次运行都会重置并检查全部输出。结果按距离、编号升序排列，编号必须与参考一致，距离容差为 `atol=rtol=1e-10`。候选不足 k 个时，余下位置填 `id=-1, distance=+inf`。当 `nprobe=nlist` 时，参考结果改用全库扫描。
 
-CSV 记录策略、线程数、查询数、batch、k、nprobe、grain、重复编号、时间、QPS、Recall 和检查结果。作业要求的候选数、线程工作量和延迟分位数需要自行采集。数据路径、编译选项和运行环境请记在报告中。
+CSV 记录策略、线程数、实际 SIMD 状态、查询数、batch、k、nprobe、grain、重复编号、时间、QPS、Recall 和检查结果。作业要求的候选数、线程工作量和延迟分位数需要自行采集。数据路径、编译选项和运行环境请记在报告中。
 
 `--only` 只选择要测的检索函数。直接对整个程序执行 `perf stat`，仍会把加载和串行参考算进去；如何单独测检索部分，见作业的性能工具要求。
 
